@@ -17,52 +17,54 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
   const [isJoystickActive, setIsJoystickActive] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const touchIdRef = useRef<number | null>(null);
 
-  // Look drag na metade direita da tela
-  const lookTouchIdRef = useRef<number | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
+  const activeLookPointerIdRef = useRef<number | null>(null);
   const lastLookPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  const JOYSTICK_RADIUS = 55;
+  const JOYSTICK_RADIUS = 50;
 
-  const handleJoystickTouchStart = (e: React.TouchEvent) => {
+  // --- CONTROLE ANALÓGICO DO JOYSTICK ---
+  const handleJoystickPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (touchIdRef.current !== null) return;
 
-    const touch = e.changedTouches[0];
-    touchIdRef.current = touch.identifier;
+    // Captura o ponteiro para rastreamento contínuo mesmo que o dedo saia do círculo
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    activePointerIdRef.current = e.pointerId;
     setIsJoystickActive(true);
-    updateJoystick(touch.clientX, touch.clientY);
+
+    updateJoystickPosition(e.clientX, e.clientY);
   };
 
-  const handleJoystickTouchMove = (e: React.TouchEvent) => {
+  const handleJoystickPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerIdRef.current !== e.pointerId) return;
+    e.preventDefault();
     e.stopPropagation();
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      if (touch.identifier === touchIdRef.current) {
-        updateJoystick(touch.clientX, touch.clientY);
-        break;
-      }
+
+    updateJoystickPosition(e.clientX, e.clientY);
+  };
+
+  const handleJoystickPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerIdRef.current !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    activePointerIdRef.current = null;
+    setIsJoystickActive(false);
+    setStickPos({ x: 0, y: 0 });
+
+    if (inputManager) {
+      inputManager.setVirtualJoystick(0, 0);
     }
   };
 
-  const handleJoystickTouchEnd = (e: React.TouchEvent) => {
-    e.stopPropagation();
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      if (touch.identifier === touchIdRef.current) {
-        touchIdRef.current = null;
-        setIsJoystickActive(false);
-        setStickPos({ x: 0, y: 0 });
-        if (inputManager) {
-          inputManager.setVirtualJoystick(0, 0);
-        }
-        break;
-      }
-    }
-  };
-
-  const updateJoystick = (clientX: number, clientY: number) => {
+  const updateJoystickPosition = (clientX: number, clientY: number) => {
     if (!joystickBaseRef.current) return;
     const rect = joystickBaseRef.current.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
@@ -81,10 +83,45 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     setStickPos({ x: stickX, y: stickY });
 
     if (inputManager) {
-      // Normalização [-1, 1]
+      // Normalização em [-1, 1]
       const normX = stickX / JOYSTICK_RADIUS;
       const normY = stickY / JOYSTICK_RADIUS;
       inputManager.setVirtualJoystick(normX, normY);
+    }
+  };
+
+  // --- CONTROLE DE ROTAÇÃO DE CÂMERA (SWIPE NA ÁREA DIREITA) ---
+  const handleLookPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activeLookPointerIdRef.current !== null) return;
+    // Ignora se o toque foi nos botões de ação
+    const target = e.target as HTMLElement;
+    if (target.closest('button')) return;
+
+    activeLookPointerIdRef.current = e.pointerId;
+    lastLookPosRef.current = { x: e.clientX, y: e.clientY };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handleLookPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activeLookPointerIdRef.current !== e.pointerId || !lastLookPosRef.current) return;
+    const dx = e.clientX - lastLookPosRef.current.x;
+    const dy = e.clientY - lastLookPosRef.current.y;
+
+    if (inputManager) {
+      inputManager.applyTouchLookDelta(dx, dy);
+    }
+    lastLookPosRef.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleLookPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activeLookPointerIdRef.current === e.pointerId) {
+      activeLookPointerIdRef.current = null;
+      lastLookPosRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
     }
   };
 
@@ -96,71 +133,40 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     }
   };
 
-  // Swipe de Câmera na área direita
-  const handleLookTouchStart = (e: React.TouchEvent) => {
-    if (lookTouchIdRef.current !== null) return;
-    const touch = e.changedTouches[0];
-    // Apenas se o toque for na metade direita da tela
-    if (touch.clientX > window.innerWidth * 0.45) {
-      lookTouchIdRef.current = touch.identifier;
-      lastLookPosRef.current = { x: touch.clientX, y: touch.clientY };
-    }
-  };
-
-  const handleLookTouchMove = (e: React.TouchEvent) => {
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      if (touch.identifier === lookTouchIdRef.current && lastLookPosRef.current) {
-        const dx = touch.clientX - lastLookPosRef.current.x;
-        const dy = touch.clientY - lastLookPosRef.current.y;
-        if (inputManager) {
-          inputManager.applyTouchLookDelta(dx, dy);
-        }
-        lastLookPosRef.current = { x: touch.clientX, y: touch.clientY };
-        break;
-      }
-    }
-  };
-
-  const handleLookTouchEnd = (e: React.TouchEvent) => {
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      if (e.changedTouches[i].identifier === lookTouchIdRef.current) {
-        lookTouchIdRef.current = null;
-        lastLookPosRef.current = null;
-        break;
-      }
-    }
-  };
-
   return (
-    <div
-      className="absolute inset-0 pointer-events-none select-none z-20"
-      onTouchStart={handleLookTouchStart}
-      onTouchMove={handleLookTouchMove}
-      onTouchEnd={handleLookTouchEnd}
-      onTouchCancel={handleLookTouchEnd}
-    >
-      {/* JOYSTICK VIRTUAL (Canto Inferior Esquerdo) */}
-      <div className="absolute bottom-6 left-6 pointer-events-auto">
+    <div className="absolute inset-0 select-none z-30 pointer-events-none" style={{ touchAction: 'none' }}>
+      {/* ÁREA DIREITA DE SWIPE PARA ORBITAR A CÂMERA */}
+      <div
+        className="absolute top-16 right-0 bottom-24 w-1/2 pointer-events-auto"
+        style={{ touchAction: 'none' }}
+        onPointerDown={handleLookPointerDown}
+        onPointerMove={handleLookPointerMove}
+        onPointerUp={handleLookPointerUp}
+        onPointerCancel={handleLookPointerUp}
+      />
+
+      {/* JOYSTICK ANALÓGICO VIRTUAL (Canto Inferior Esquerdo) */}
+      <div className="absolute bottom-6 left-6 pointer-events-auto" style={{ touchAction: 'none' }}>
         <div
           ref={joystickBaseRef}
-          onTouchStart={handleJoystickTouchStart}
-          onTouchMove={handleJoystickTouchMove}
-          onTouchEnd={handleJoystickTouchEnd}
-          onTouchCancel={handleJoystickTouchEnd}
-          className={`w-32 h-32 rounded-full border-2 border-sky-400/40 bg-slate-950/60 backdrop-blur-md relative flex items-center justify-center transition-colors ${
-            isJoystickActive ? 'border-sky-400 bg-sky-950/40' : ''
+          onPointerDown={handleJoystickPointerDown}
+          onPointerMove={handleJoystickPointerMove}
+          onPointerUp={handleJoystickPointerUp}
+          onPointerCancel={handleJoystickPointerUp}
+          className={`w-32 h-32 rounded-full border-2 border-sky-400/50 bg-slate-950/70 backdrop-blur-md relative flex items-center justify-center transition-colors cursor-pointer select-none ${
+            isJoystickActive ? 'border-sky-300 bg-sky-950/60 shadow-[0_0_20px_rgba(56,189,248,0.4)]' : ''
           }`}
+          style={{ touchAction: 'none' }}
         >
-          {/* Indicadores cardeais sutis */}
-          <div className="absolute top-1 text-[9px] font-mono text-sky-400/60">W</div>
-          <div className="absolute bottom-1 text-[9px] font-mono text-sky-400/60">S</div>
-          <div className="absolute left-1 text-[9px] font-mono text-sky-400/60">A</div>
-          <div className="absolute right-1 text-[9px] font-mono text-sky-400/60">D</div>
+          {/* Guias direcionais sutis */}
+          <div className="absolute top-1 text-[10px] font-mono font-bold text-sky-400/60">W</div>
+          <div className="absolute bottom-1 text-[10px] font-mono font-bold text-sky-400/60">S</div>
+          <div className="absolute left-1 text-[10px] font-mono font-bold text-sky-400/60">A</div>
+          <div className="absolute right-1 text-[10px] font-mono font-bold text-sky-400/60">D</div>
 
-          {/* Botão de controle (Thumb Stick) */}
+          {/* Manípulo (Thumb Stick) */}
           <div
-            className="w-14 h-14 rounded-full bg-gradient-to-tr from-sky-600 to-cyan-400 border border-white/40 shadow-lg pointer-events-none transition-transform duration-75"
+            className="w-14 h-14 rounded-full bg-gradient-to-tr from-sky-500 via-cyan-400 to-white border-2 border-white/60 shadow-xl pointer-events-none transition-transform duration-75"
             style={{
               transform: `translate(${stickPos.x}px, ${stickPos.y}px)`
             }}
@@ -169,28 +175,30 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
       </div>
 
       {/* BOTÕES DE AÇÃO (Canto Inferior Direito) */}
-      <div className="absolute bottom-6 right-6 pointer-events-auto flex items-end gap-3">
+      <div className="absolute bottom-6 right-6 pointer-events-auto flex items-end gap-3" style={{ touchAction: 'none' }}>
         {/* Botão de Corrida (Sprint Toggle) */}
         <button
+          type="button"
           onClick={toggleRun}
-          className={`w-14 h-14 rounded-full border flex flex-col items-center justify-center transition-all active:scale-90 shadow-xl ${
+          className={`w-14 h-14 rounded-full border-2 flex flex-col items-center justify-center transition-all active:scale-90 shadow-xl ${
             isRunning
-              ? 'bg-amber-500 border-amber-300 text-slate-950 font-bold shadow-[0_0_15px_rgba(245,158,11,0.6)]'
-              : 'bg-slate-900/80 border-slate-700 text-slate-300'
+              ? 'bg-amber-500 border-amber-300 text-slate-950 font-bold shadow-[0_0_20px_rgba(245,158,11,0.7)]'
+              : 'bg-slate-900/90 border-slate-700 text-slate-300'
           }`}
           title="Alternar Corrida"
         >
-          <Zap className="w-5 h-5" />
-          <span className="text-[9px] font-mono uppercase">Run</span>
+          <Zap className="w-5 h-5 fill-current" />
+          <span className="text-[9px] font-mono uppercase font-bold">Run</span>
         </button>
 
-        {/* Botão Principal de Interação */}
+        {/* Botão de Interação / Ação */}
         <button
+          type="button"
           onClick={onInteract}
           className={`w-20 h-20 rounded-full flex flex-col items-center justify-center font-bold border-2 transition-all active:scale-95 shadow-2xl ${
             canInteract
-              ? 'bg-gradient-to-tr from-sky-500 to-cyan-400 text-white border-white animate-pulse shadow-[0_0_25px_rgba(56,189,248,0.8)]'
-              : 'bg-slate-900/60 border-slate-700/60 text-slate-500'
+              ? 'bg-gradient-to-tr from-sky-500 to-cyan-400 text-white border-white animate-pulse shadow-[0_0_30px_rgba(56,189,248,0.9)]'
+              : 'bg-slate-900/80 border-slate-700/80 text-slate-400'
           }`}
           title="Interagir"
         >

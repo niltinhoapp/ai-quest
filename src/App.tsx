@@ -30,6 +30,7 @@ export const App: React.FC = () => {
 
   // Estado do Jogo e Missões
   const [savedData, setSavedData] = useState(() => SaveManager.loadGame());
+  const [inputManager, setInputManager] = useState<any>(null);
   const [missionManager, setMissionManager] = useState<MissionManager>(() => {
     const loaded = SaveManager.loadGame();
     const mm = new MissionManager(INITIAL_MISSIONS, loaded.totalXP);
@@ -49,10 +50,25 @@ export const App: React.FC = () => {
   const [audioEnabled, setAudioEnabled] = useState<boolean>(savedData.settings.audioEnabled);
   const [graphicsQuality, setGraphicsQuality] = useState<'low' | 'medium' | 'high'>(savedData.settings.graphicsQuality);
 
-  // Detecção de Dispositivo Touch / Mobile
-  const isTouchDevice = useMemo(() => {
+  // Detecção Dinâmica e Confiável de Dispositivo Touch / Mobile
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    return (
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      window.innerWidth <= 1024
+    );
+  });
+
+  useEffect(() => {
+    const enableTouch = () => setIsTouchDevice(true);
+    window.addEventListener('touchstart', enableTouch, { passive: true });
+    window.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.pointerType === 'touch') setIsTouchDevice(true);
+    }, { passive: true });
+    return () => {
+      window.removeEventListener('touchstart', enableTouch);
+    };
   }, []);
 
   // Inicializa ou atualiza áudio no início
@@ -82,6 +98,7 @@ export const App: React.FC = () => {
       engine.setQuality(graphicsQuality);
       engine.start();
       gameEngineRef.current = engine;
+      setInputManager(engine.inputManager);
 
       // Restaura destravamento de portas se o jogador já possuir save
       if (missions['mission-1']?.status === 'completed' || missions['mission-2']?.status === 'completed') {
@@ -98,6 +115,7 @@ export const App: React.FC = () => {
       return () => {
         engine.dispose();
         gameEngineRef.current = null;
+        setInputManager(null);
       };
     } catch (err) {
       console.error('Erro ao inicializar o motor de jogo 3D:', err);
@@ -241,7 +259,7 @@ export const App: React.FC = () => {
           {/* CONTROLES MOBILE VIRTUAIS (Apenas se tela touch e sem modal aberto) */}
           {isTouchDevice && !isPaused && activeModal === null && (
             <MobileControls
-              inputManager={gameEngineRef.current?.inputManager || null}
+              inputManager={inputManager}
               onInteract={() => {
                 if (gameEngineRef.current) {
                   gameEngineRef.current.handleInteractionTrigger();
